@@ -9,6 +9,8 @@ from tornado import gen
 from tornado import escape
 from tornado.escape import utf8
 from logzero import logfile, logger
+from ibm_watson import ToneAnalyzerV3
+from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 
 logfile("/tmp/workshop.log", maxBytes=1e6, backupCount=3)
 
@@ -70,6 +72,14 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
             on_message_callback=self.on_transcriber_message,
         )
 
+        authenticator = IAMAuthenticator(os.environ["WATSON_TONE_KEY"])
+        self.tone_analyzer = ToneAnalyzerV3(
+            version="2016-05-19", authenticator=authenticator
+        )
+        self.tone_analyzer.set_service_url(
+            "https://gateway.watsonplatform.net/tone-analyzer/api"
+        )
+
     @property
     def transcriber_token(self):
         resp = requests.post(
@@ -87,7 +97,11 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
             message = json.loads(message)
             if "results" in message:
                 transcript = message["results"][0]["alternatives"][0]["transcript"]
-                logger.info(transcript)
+                tone_results = self.tone_analyzer.tone(
+                    tone_input=transcript, content_type="text/plain"
+                ).get_result()
+                tones = tone_results["document_tone"]["tone_categories"][0]["tones"]
+                logger.info(tones)
 
     @gen.coroutine
     def on_message(self, message):
