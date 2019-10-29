@@ -15,6 +15,33 @@ from ibm_cloud_sdk_core.authenticators import IAMAuthenticator
 logfile("/tmp/workshop.log", maxBytes=1e6, backupCount=3)
 
 
+class DashboardUIHandler(tornado.web.RequestHandler):
+    def get(self):
+        self.render("templates/dashboard.html", server_url=os.environ["WS_SERVER_URL"])
+
+
+class DashboardHandler(tornado.websocket.WebSocketHandler):
+
+    connected_clients = set()
+
+    def check_origin(self, origin):
+        return True
+
+    def open(self):
+        logger.info("New Dashboard WebSocket connection")
+        DashboardHandler.connected_clients.add(self)
+
+    def on_close(self):
+        logger.info("Dashboard WebSocket connection closed")
+        DashboardHandler.connected_clients.remove(self)
+
+    @classmethod
+    def send_updates(cls, tones):
+        logger.debug(tones)
+        for connected_client in cls.connected_clients:
+            connected_client.write_message(tones)
+
+
 class VAPIServer(tornado.web.RequestHandler):
     def write(self, chunk):
         chunk = escape.json_encode(chunk)
@@ -101,7 +128,8 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
                     tone_input=transcript, content_type="text/plain"
                 ).get_result()
                 tones = tone_results["document_tone"]["tone_categories"][0]["tones"]
-                logger.info(tones)
+
+                DashboardHandler.send_updates(json.dumps(tones))
 
     @gen.coroutine
     def on_message(self, message):
@@ -134,9 +162,12 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
 def make_app():
     return tornado.web.Application(
         [
+            (r"/static/(.*)", tornado.web.StaticFileHandler, {"path": "app/static"}),
             (r"/", VAPIServer),
             (r"/inbound-call-socket", InboundCallHandler),
             (r"/recordings", RecordingsServer),
+            (r"/dashboard-socket", DashboardHandler),
+            (r"/dashboard", DashboardUIHandler),
         ]
     )
 
@@ -145,3 +176,4 @@ if __name__ == "__main__":
     app = make_app()
     app.listen(8000)
     tornado.ioloop.IOLoop.current().start()
+
