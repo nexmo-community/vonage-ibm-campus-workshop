@@ -1,7 +1,10 @@
 import os
 import json
+import tornado.httpserver
+import tornado.websocket
 import tornado.ioloop
 import tornado.web
+from tornado import gen
 from tornado import escape
 from tornado.escape import utf8
 from logzero import logfile, logger
@@ -56,9 +59,31 @@ class RecordingsServer(tornado.web.RequestHandler):
         self.write("OK")
 
 
+class InboundCallHandler(tornado.websocket.WebSocketHandler):
+
+    connections = []
+
+    @gen.coroutine
+    def on_message(self, message):
+        logger.info("New message received")
+
+    def open(self):
+        logger.info("New connection opened")
+        self.connections.append(self)
+
+    @gen.coroutine
+    def on_close(self):
+        logger.info("Connection closed")
+        self.connections.remove(self)
+
+
 def make_app():
     return tornado.web.Application(
-        [(r"/", VAPIServer), (r"/recordings", RecordingsServer),]
+        [
+            (r"/", VAPIServer),
+            (r"/inbound-call-socket", InboundCallHandler),
+            (r"/recordings", RecordingsServer),
+        ]
     )
 
 
