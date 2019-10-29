@@ -1,5 +1,6 @@
 import os
 import json
+import requests
 import tornado.httpserver
 import tornado.websocket
 import tornado.ioloop
@@ -63,9 +64,44 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
 
     connections = []
 
+    def initialize(self, **kwargs):
+        self.transcriber = tornado.websocket.websocket_connect(
+            f"wss://stream.watsonplatform.net/speech-to-text/api/v1/recognize?access_token={self.transcriber_token}&model=en-UK_NarrowbandModel",
+            on_message_callback=self.on_transcriber_message,
+        )
+
+    @property
+    def transcriber_token(self):
+        resp = requests.post(
+            "https://iam.cloud.ibm.com/identity/token",
+            headers={"Accept": "application/json"},
+            params={
+                "grant_type": "urn:ibm:params:oauth:grant-type:apikey",
+                "apikey": os.environ["WATSON_TRANSCRIPTION_KEY"],
+            },
+        )
+        return resp.json()["access_token"]
+
+    def on_transcriber_message(self, message):
+        if message:
+            message = json.loads(message)
+            if "results" in message:
+                transcript = message["results"][0]["alternatives"][0]["transcript"]
+                logger.info(transcript)
+
     @gen.coroutine
     def on_message(self, message):
-        logger.info("New message received")
+        transcriber = yield self.transcriber
+
+        if type(message) != str:
+            transcriber.write_message(message, binary=True)
+        else:
+            data = json.loads(message)
+            logger.info(data)
+            data["action"] = "start"
+            data["continuous"] = True
+            data["interim_results"] = True
+            transcriber.write_message(json.dumps(data), binary=False)
 
     def open(self):
         logger.info("New connection opened")
@@ -75,6 +111,10 @@ class InboundCallHandler(tornado.websocket.WebSocketHandler):
     def on_close(self):
         logger.info("Connection closed")
         self.connections.remove(self)
+        transcriber = yield self.transcriber
+        data = {"action": "stop"}
+        transcriber.write_message(json.dumps(data), binary=False)
+        transcriber.close()
 
 
 def make_app():
